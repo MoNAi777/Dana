@@ -48,7 +48,7 @@ const FileUpload = ({ onFilesAdded }) => {
       onClick={openFileDialog}
     >
       <div className="upload-icon">📂</div>
-      <p className="upload-text">גרור קבצי Word או PDF לכאן, או לחץ לבחירת קבצים</p>
+      <p className="upload-text">גרור קבצים לכאן, או לחץ לבחירת קבצים</p>
       <p className="upload-hint">ניתן לבחור מספר קבצים בו-זמנית</p>
       <input 
         type="file" 
@@ -56,7 +56,7 @@ const FileUpload = ({ onFilesAdded }) => {
         style={{ display: 'none' }} 
         multiple
         onChange={handleFileSelect}
-        accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        accept=".pdf,.doc,.docx,.rtf,.odt,.ppt,.pptx,.odp,.xls,.xlsx,.ods,.csv,.txt,.jpg,.jpeg,.png,.gif,.bmp,.tiff,.tif,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/rtf,application/vnd.oasis.opendocument.text,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.oasis.opendocument.presentation,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.oasis.opendocument.spreadsheet,text/csv,image/jpeg,image/png,image/gif,image/bmp,image/tiff,image/webp,text/plain"
       />
     </div>
   );

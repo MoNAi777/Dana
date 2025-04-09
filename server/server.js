@@ -50,21 +50,73 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-  // Accept only PDF and Word files
+  // Accept a wider range of file types
   const mimeType = (file.mimetype || '').toLowerCase();
+  const originalName = (file.originalname || '').toLowerCase();
   
-  if (
-    mimeType.includes('pdf') ||
-    mimeType.includes('msword') ||
-    mimeType.includes('openxmlformats-officedocument') ||
-    (file.originalname || '').toLowerCase().endsWith('.pdf') ||
-    (file.originalname || '').toLowerCase().endsWith('.doc') ||
-    (file.originalname || '').toLowerCase().endsWith('.docx')
-  ) {
-    cb(null, true);
-  } else {
-    cb(new Error('Unsupported file type. Only PDF and Word files are allowed.'), false);
+  // PDF files
+  if (mimeType.includes('pdf') || originalName.endsWith('.pdf')) {
+    return cb(null, true);
   }
+  
+  // Word files (doc, docx, rtf, odt)
+  if (
+    mimeType.includes('msword') ||
+    mimeType.includes('openxmlformats-officedocument.wordprocessingml') ||
+    mimeType.includes('rtf') ||
+    mimeType.includes('opendocument.text') ||
+    originalName.endsWith('.doc') ||
+    originalName.endsWith('.docx') ||
+    originalName.endsWith('.rtf') ||
+    originalName.endsWith('.odt')
+  ) {
+    return cb(null, true);
+  }
+  
+  // Presentation files (ppt, pptx, odp)
+  if (
+    mimeType.includes('presentation') ||
+    mimeType.includes('powerpoint') ||
+    mimeType.includes('opendocument.presentation') ||
+    originalName.endsWith('.ppt') ||
+    originalName.endsWith('.pptx') ||
+    originalName.endsWith('.odp')
+  ) {
+    return cb(null, true);
+  }
+  
+  // Spreadsheet files (xls, xlsx, ods, csv)
+  if (
+    mimeType.includes('spreadsheet') ||
+    mimeType.includes('excel') ||
+    mimeType.includes('csv') ||
+    mimeType.includes('opendocument.spreadsheet') ||
+    originalName.endsWith('.xls') ||
+    originalName.endsWith('.xlsx') ||
+    originalName.endsWith('.ods') ||
+    originalName.endsWith('.csv')
+  ) {
+    return cb(null, true);
+  }
+  
+  // Text files
+  if (
+    mimeType.includes('text/plain') ||
+    originalName.endsWith('.txt')
+  ) {
+    return cb(null, true);
+  }
+  
+  // Image files (common formats that can be converted to PDF)
+  if (
+    mimeType.includes('image/') ||
+    originalName.match(/\.(jpg|jpeg|png|gif|bmp|tiff|tif|webp)$/)
+  ) {
+    return cb(null, true);
+  }
+  
+  // Reject other file types
+  cb(new Error('סוג קובץ זה אינו נתמך. קבצים נתמכים: PDF, Word, PowerPoint, Excel, CSV, תמונות וקבצי טקסט.'), false);
 };
 
 const upload = multer({ 

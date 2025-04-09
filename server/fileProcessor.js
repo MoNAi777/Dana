@@ -4,6 +4,14 @@ const { PDFDocument } = require('pdf-lib');
 const mammoth = require('mammoth');
 const { Document, Packer, Paragraph, TextRun } = require('docx');
 const pdf = require('pdf-parse');
+const libre = require('libreoffice-convert');
+const textract = require('textract');
+const rtlDetect = require('rtl-detect');
+const temp = require('temp').track(); // Auto track and cleanup temp files
+const { promisify } = require('util');
+
+// Convert libre methods to promises
+const libreConvert = promisify(libre.convert);
 
 /**
  * Extract text content from a PDF file
@@ -26,7 +34,19 @@ async function extractPdfText(filePath) {
     
     try {
       const data = await pdf(dataBuffer);
-      return data.text || "";
+      const extractedText = data.text || "";
+      
+      // Check if the text contains Hebrew characters
+      const hebrewRegex = /[\u0590-\u05FF\uFB1D-\uFB4F]/;
+      const containsHebrew = hebrewRegex.test(extractedText);
+      
+      if (containsHebrew) {
+        console.log(`Hebrew text detected in PDF: ${filePath}`);
+        // Add RTL mark to ensure proper text direction - this helps in some cases
+        return '\u202B' + extractedText;
+      }
+      
+      return extractedText;
     } catch (parseError) {
       console.error(`Error parsing PDF: ${parseError.message}`);
       return "";
@@ -79,26 +99,40 @@ async function createWordDocument(textContent, outputPath) {
       textContent = "";
     }
     
+    // Check if the text contains Hebrew characters
+    const hebrewRegex = /[\u0590-\u05FF\uFB1D-\uFB4F]/;
+    const containsHebrew = hebrewRegex.test(textContent);
+    
     // Split the content into paragraphs
     const paragraphs = textContent.split('\n')
       .filter(line => line && line.trim() !== '')
       .map(line => {
+        // Check if this specific line contains Hebrew
+        const lineContainsHebrew = hebrewRegex.test(line);
+        
         return new Paragraph({
           children: [
             new TextRun({
               text: line,
               // Support for RTL text (Hebrew)
-              bidirectional: true
+              bidirectional: lineContainsHebrew || containsHebrew
             })
           ],
-          bidirectional: true
+          // Set paragraph direction based on content
+          bidirectional: lineContainsHebrew || containsHebrew,
+          rightTabStop: lineContainsHebrew ? 9000 : undefined,
+          // If this line has Hebrew, set it to right-aligned
+          alignment: lineContainsHebrew ? "right" : "left"
         });
       });
 
-    // Create a new document
+    // Create a new document with RTL support
     const doc = new Document({
       sections: [{
-        properties: {},
+        properties: {
+          // Set document direction for documents with Hebrew
+          rtl: containsHebrew
+        },
         children: paragraphs.length > 0 ? paragraphs : [new Paragraph({ text: '' })]
       }]
     });
@@ -453,6 +487,10 @@ async function wordToPdf(wordFilePath, outputPath) {
       text = `[Error extracting text from: ${path.basename(wordFilePath)}]`;
     }
     
+    // Check if the text contains Hebrew characters
+    const hebrewRegex = /[\u0590-\u05FF\uFB1D-\uFB4F]/;
+    const containsHebrew = hebrewRegex.test(text);
+    
     // Create PDF with the text content using PDF 1.4 for better compatibility
     const pdfDoc = await PDFDocument.create();
     
@@ -470,7 +508,7 @@ async function wordToPdf(wordFilePath, outputPath) {
     
     // Add document name at the top
     currentPage.drawText(path.basename(wordFilePath), {
-      x: margin,
+      x: containsHebrew ? 545 - margin : margin,
       y: y,
       size: 14
     });
@@ -509,8 +547,17 @@ async function wordToPdf(wordFilePath, outputPath) {
       
       // Add each line to the PDF
       for (const line of lines) {
-        currentPage.drawText(line, {
-          x: margin,
+        // Check if this specific line contains Hebrew
+        const lineContainsHebrew = hebrewRegex.test(line);
+        
+        // Calculate appropriate x position based on text direction
+        const xPosition = lineContainsHebrew ? 545 - margin : margin;
+        
+        // Add RTL mark for Hebrew text
+        const displayText = lineContainsHebrew ? '\u202B' + line : line;
+        
+        currentPage.drawText(displayText, {
+          x: xPosition,
           y: y,
           size: fontSize
         });
@@ -588,6 +635,134 @@ async function wordToPdf(wordFilePath, outputPath) {
       throw error; // Throw the original error
     }
   }
+}
+
+/**
+ * Convert any supported file to PDF using LibreOffice
+ * @param {string} filePath - Path to the file
+ * @param {string} outputPath - Path to save the PDF
+ * @returns {Promise<string>} - Path to the created PDF
+ */
+async function convertToPdf(filePath, outputPath) {
+  try {
+    console.log(`Converting file to PDF using LibreOffice: ${filePath} -> ${outputPath}`);
+    
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      console.error(`File does not exist: ${filePath}`);
+      throw new Error(`File not found: ${filePath}`);
+    }
+    
+    // Read file
+    const fileData = await fs.readFile(filePath);
+    if (!fileData || fileData.length === 0) {
+      throw new Error(`Empty file: ${filePath}`);
+    }
+    
+    // Convert to PDF format
+    const pdfBuf = await libreConvert(fileData, '.pdf', undefined);
+    
+    // Ensure the directory exists
+    const dir = path.dirname(outputPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    
+    // Save the PDF
+    await fs.writeFile(outputPath, pdfBuf);
+    
+    // Verify the PDF is valid
+    try {
+      await PDFDocument.load(fs.readFileSync(outputPath), { ignoreEncryption: true });
+      console.log(`Successfully converted to PDF: ${outputPath}`);
+      return outputPath;
+    } catch (verifyError) {
+      console.error(`Converted PDF failed validation: ${outputPath}`, verifyError);
+      throw new Error(`Invalid PDF produced`);
+    }
+  } catch (error) {
+    console.error('Error in LibreOffice conversion:', error);
+    // Create fallback simple PDF
+    return await createSimplePdf(
+      outputPath,
+      `Conversion failed for: ${path.basename(filePath)}\nError: ${error.message}`
+    );
+  }
+}
+
+/**
+ * Extract text from any supported file using textract
+ * @param {string} filePath - Path to the file
+ * @returns {Promise<string>} - Extracted text
+ */
+async function extractTextFromFile(filePath) {
+  return new Promise((resolve, reject) => {
+    console.log(`Extracting text from file using textract: ${filePath}`);
+    textract.fromFileWithPath(filePath, { preserveLineBreaks: true }, (error, text) => {
+      if (error) {
+        console.error(`Error extracting text: ${error.message}`);
+        resolve(""); // Return empty string on error
+      } else {
+        resolve(text || "");
+      }
+    });
+  });
+}
+
+/**
+ * Identify file type based on extension and mime type
+ * @param {object} file - File object from multer
+ * @returns {string} - File type ('pdf', 'word', 'presentation', 'spreadsheet', 'image', 'other')
+ */
+function identifyFileType(file) {
+  if (!file) return 'unknown';
+  
+  const fileExt = path.extname(file.path || file.originalname || '').toLowerCase();
+  const mimeType = (file.mimetype || '').toLowerCase();
+  
+  // PDF files
+  if (fileExt === '.pdf' || mimeType.includes('pdf')) {
+    return 'pdf';
+  }
+  
+  // Word documents
+  if (fileExt === '.docx' || fileExt === '.doc' || fileExt === '.rtf' || fileExt === '.odt' ||
+      mimeType.includes('msword') || 
+      mimeType.includes('openxmlformats-officedocument.wordprocessingml') ||
+      mimeType.includes('rtf') ||
+      mimeType.includes('opendocument.text')) {
+    return 'word';
+  }
+  
+  // Presentations
+  if (fileExt === '.pptx' || fileExt === '.ppt' || fileExt === '.odp' ||
+      mimeType.includes('presentation') ||
+      mimeType.includes('opendocument.presentation')) {
+    return 'presentation';
+  }
+  
+  // Spreadsheets
+  if (fileExt === '.xlsx' || fileExt === '.xls' || fileExt === '.ods' ||
+      fileExt === '.csv' || fileExt === '.tsv' ||
+      mimeType.includes('spreadsheet') ||
+      mimeType.includes('opendocument.spreadsheet') ||
+      mimeType.includes('excel') ||
+      mimeType.includes('csv')) {
+    return 'spreadsheet';
+  }
+  
+  // Images
+  if (['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp'].includes(fileExt) ||
+      mimeType.includes('image/')) {
+    return 'image';
+  }
+  
+  // Text files
+  if (fileExt === '.txt' || mimeType.includes('text/plain')) {
+    return 'text';
+  }
+  
+  return 'other';
 }
 
 /**
@@ -698,18 +873,13 @@ async function mergeFiles(files, outputFormat = 'pdf') {
       if (outputFormat === 'pdf') {
         const pdfFiles = [];
         
-        // First, process Word files (convert to PDF)
+        // Process files for PDF conversion
         for (const file of validFiles) {
           try {
-            const fileExt = path.extname(file.path).toLowerCase();
-            const mimeType = file.mimetype ? file.mimetype.toLowerCase() : '';
+            const fileType = identifyFileType(file);
+            console.log(`Processing file: ${file.path}, identified as: ${fileType}`);
             
-            const isPdf = fileExt === '.pdf' || mimeType.includes('pdf');
-            const isWord = fileExt === '.docx' || fileExt === '.doc' || 
-                  mimeType.includes('msword') || 
-                  mimeType.includes('openxmlformats-officedocument');
-            
-            if (isPdf) {
+            if (fileType === 'pdf') {
               // Validate the PDF first
               try {
                 const pdfBuffer = fs.readFileSync(file.path);
@@ -718,38 +888,43 @@ async function mergeFiles(files, outputFormat = 'pdf') {
                 pdfFiles.push(file.path);
               } catch (validateError) {
                 console.error(`Invalid PDF file: ${file.path}`, validateError);
-                // Skip this file
-              }
-            } else if (isWord) {
-              try {
-                // Use a unique name for each converted PDF
-                const pdfPath = path.join(tmpDir, `${path.basename(file.path, fileExt)}_${Date.now()}.pdf`);
-                console.log(`Converting Word to PDF: ${file.path} -> ${pdfPath}`);
-                
-                // Convert using our improved function
-                await wordToPdf(file.path, pdfPath);
-                
-                // Verify the converted PDF
-                if (fs.existsSync(pdfPath) && fs.statSync(pdfPath).size > 0) {
-                  try {
-                    // Validate the PDF structure
-                    const pdfBuffer = fs.readFileSync(pdfPath);
-                    await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
-                    pdfFiles.push(pdfPath);
-                    console.log(`Word file successfully converted to PDF: ${pdfPath}`);
-                  } catch (validateError) {
-                    console.error(`Converted PDF is invalid: ${pdfPath}`, validateError);
-                    // Skip this file
-                  }
-                } else {
-                  console.error(`PDF conversion failed: ${pdfPath} is empty or doesn't exist`);
+                // Try to convert the file as a fallback
+                try {
+                  const tempPdfPath = path.join(tmpDir, `converted_${Date.now()}_${path.basename(file.path, path.extname(file.path))}.pdf`);
+                  const convertedPath = await convertToPdf(file.path, tempPdfPath);
+                  pdfFiles.push(convertedPath);
+                } catch (conversionError) {
+                  console.error(`Failed to convert file as fallback: ${file.path}`, conversionError);
                 }
-              } catch (error) {
-                console.error(`Error converting Word to PDF ${file.path}:`, error);
-                // Continue with other files
+              }
+            } else if (fileType === 'word') {
+              // Convert Word to PDF
+              try {
+                const pdfPath = path.join(tmpDir, `${path.basename(file.path, path.extname(file.path))}_${Date.now()}.pdf`);
+                await wordToPdf(file.path, pdfPath);
+                if (fs.existsSync(pdfPath) && fs.statSync(pdfPath).size > 0) {
+                  pdfFiles.push(pdfPath);
+                }
+              } catch (wordError) {
+                console.error(`Error converting Word to PDF: ${file.path}`, wordError);
+                // Try generic converter as fallback
+                try {
+                  const tempPdfPath = path.join(tmpDir, `converted_${Date.now()}_${path.basename(file.path, path.extname(file.path))}.pdf`);
+                  const convertedPath = await convertToPdf(file.path, tempPdfPath);
+                  pdfFiles.push(convertedPath);
+                } catch (fallbackError) {
+                  console.error(`Failed to convert with fallback: ${file.path}`, fallbackError);
+                }
               }
             } else {
-              console.log(`Unsupported file type: ${fileExt}, ${mimeType}`);
+              // Use generic converter for other file types
+              try {
+                const pdfPath = path.join(tmpDir, `${path.basename(file.path, path.extname(file.path))}_${Date.now()}.pdf`);
+                const convertedPath = await convertToPdf(file.path, pdfPath);
+                pdfFiles.push(convertedPath);
+              } catch (conversionError) {
+                console.error(`Error converting file to PDF: ${file.path}`, conversionError);
+              }
             }
           } catch (fileError) {
             console.error(`Error processing file: ${file.path}`, fileError);
@@ -773,15 +948,10 @@ async function mergeFiles(files, outputFormat = 'pdf') {
         // Process each file to extract text
         for (const file of validFiles) {
           try {
-            const fileExt = path.extname(file.path).toLowerCase();
-            const mimeType = file.mimetype ? file.mimetype.toLowerCase() : '';
+            const fileType = identifyFileType(file);
+            console.log(`Processing file for text extraction: ${file.path}, identified as: ${fileType}`);
             
-            const isPdf = fileExt === '.pdf' || mimeType.includes('pdf');
-            const isWord = fileExt === '.docx' || fileExt === '.doc' || 
-                  mimeType.includes('msword') || 
-                  mimeType.includes('openxmlformats-officedocument');
-            
-            if (isPdf) {
+            if (fileType === 'pdf') {
               // Extract text from PDF
               try {
                 const text = await extractPdfText(file.path);
@@ -793,7 +963,7 @@ async function mergeFiles(files, outputFormat = 'pdf') {
                 combinedText += `\n\n=== ${file.originalname || 'PDF Document'} [Error] ===\n\n`;
                 combinedText += "[Error extracting text from PDF]\n\n";
               }
-            } else if (isWord) {
+            } else if (fileType === 'word') {
               // Extract text from Word
               try {
                 const text = await extractWordText(file.path);
@@ -802,8 +972,29 @@ async function mergeFiles(files, outputFormat = 'pdf') {
                 combinedText += '\n\n';
               } catch (error) {
                 console.error(`Error extracting text from Word ${file.path}:`, error);
-                combinedText += `\n\n=== ${file.originalname || 'Word Document'} [Error] ===\n\n`;
-                combinedText += "[Error extracting text from document]\n\n";
+                // Try generic text extraction
+                try {
+                  const text = await extractTextFromFile(file.path);
+                  combinedText += `\n\n=== ${file.originalname || 'Document'} ===\n\n`;
+                  combinedText += text || "[No text could be extracted with fallback method]";
+                  combinedText += '\n\n';
+                } catch (fallbackError) {
+                  console.error(`Fallback text extraction failed: ${file.path}`, fallbackError);
+                  combinedText += `\n\n=== ${file.originalname || 'Document'} [Error] ===\n\n`;
+                  combinedText += "[Error extracting text from document]\n\n";
+                }
+              }
+            } else {
+              // Use generic text extraction for other file types
+              try {
+                const text = await extractTextFromFile(file.path);
+                combinedText += `\n\n=== ${file.originalname || fileType.charAt(0).toUpperCase() + fileType.slice(1) + ' Document'} ===\n\n`;
+                combinedText += text || `[No text could be extracted from this ${fileType} file]`;
+                combinedText += '\n\n';
+              } catch (extractError) {
+                console.error(`Error extracting text from ${fileType} file: ${file.path}`, extractError);
+                combinedText += `\n\n=== ${file.originalname || 'Document'} [Error] ===\n\n`;
+                combinedText += `[Error extracting text from ${fileType} file]\n\n`;
               }
             }
           } catch (fileError) {
@@ -907,5 +1098,8 @@ module.exports = {
   createWordDocument,
   mergePdfFiles,
   wordToPdf,
-  createSimplePdf
+  createSimplePdf,
+  convertToPdf,
+  extractTextFromFile,
+  identifyFileType
 }; 

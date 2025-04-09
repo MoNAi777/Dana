@@ -10,18 +10,78 @@ const API_URL = 'http://localhost:5000/api';
 
 // הגדרה של סוגי קבצים מותרים
 const ALLOWED_TYPES = [
-  'application/pdf', 
-  'application/msword', 
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  // PDF
+  'application/pdf',
+  
+  // Word documents
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/rtf',
+  'application/vnd.oasis.opendocument.text',
+  
+  // Presentations
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.oasis.opendocument.presentation',
+  
+  // Spreadsheets
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'text/csv',
+  
+  // Images
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/bmp',
+  'image/tiff',
+  'image/webp',
+  
+  // Text
+  'text/plain'
 ];
 
-// בדיקה האם סיומת הקובץ היא PDF או Word
+// בדיקה האם סיומת הקובץ היא תקינה
 const hasValidExtension = (filename) => {
   if (!filename) return false;
   const lowerName = filename.toLowerCase();
-  return lowerName.endsWith('.pdf') || 
-         lowerName.endsWith('.doc') || 
-         lowerName.endsWith('.docx');
+  
+  // Document formats
+  if (lowerName.endsWith('.pdf') || 
+      lowerName.endsWith('.doc') || 
+      lowerName.endsWith('.docx') ||
+      lowerName.endsWith('.rtf') ||
+      lowerName.endsWith('.odt')) {
+    return true;
+  }
+  
+  // Presentation formats
+  if (lowerName.endsWith('.ppt') || 
+      lowerName.endsWith('.pptx') ||
+      lowerName.endsWith('.odp')) {
+    return true;
+  }
+  
+  // Spreadsheet formats
+  if (lowerName.endsWith('.xls') || 
+      lowerName.endsWith('.xlsx') ||
+      lowerName.endsWith('.ods') ||
+      lowerName.endsWith('.csv')) {
+    return true;
+  }
+  
+  // Image formats
+  if (lowerName.match(/\.(jpg|jpeg|png|gif|bmp|tiff|tif|webp)$/)) {
+    return true;
+  }
+  
+  // Text format
+  if (lowerName.endsWith('.txt')) {
+    return true;
+  }
+  
+  return false;
 };
 
 function App() {
@@ -322,8 +382,8 @@ function App() {
       )}
       
       <div className="app-intro">
-        <p>גרור קבצי PDF או Word לכאן, או לחץ לבחירת קבצים. ניתן לשנות את סדר הקבצים באמצעות גרירה.</p>
-        <p className="file-types">סוגי קבצים נתמכים: PDF, DOC, DOCX</p>
+        <p>גרור קבצי PDF, Word, מצגות, גיליונות אלקטרוניים, תמונות או טקסט לכאן, או לחץ לבחירת קבצים. ניתן לשנות את סדר הקבצים באמצעות גרירה.</p>
+        <p className="file-types">סוגי קבצים נתמכים: PDF, DOC, DOCX, RTF, ODT, PPT, PPTX, XLS, XLSX, CSV, JPG, PNG, TXT ועוד</p>
       </div>
       
       <FileUpload onFilesAdded={handleFilesAdded} />
